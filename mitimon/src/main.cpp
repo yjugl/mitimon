@@ -196,6 +196,68 @@ int main()
         }
     );
 
+    // This temporarily adds an extra provider for ACG failures.
+    // This provider catches more failures, but we only get kernel stack traces.
+    tracer.addCustomProvider(L"Microsoft-Windows-Kernel-Memory", 0x100,
+        [&backgroundTasks, &sout, &soutMutex](const EVENT_RECORD& record, const krabs::trace_context& traceContext)
+        {
+            krabs::schema schema(record, traceContext.schema_locator);
+            auto taskName = schema.task_name();
+            auto eventId = schema.event_id();
+            auto pid = schema.process_id();
+            auto tid = schema.thread_id();
+            auto stackTrace = schema.stack_trace();
+
+            krabs::parser parser(schema);
+            std::vector<std::wstring> properties;
+
+            uint32_t AcgFlag = parser.parse<uint32_t>(L"AcgFlag");
+            if ((AcgFlag & 0x80000000) == 0) {
+                return;
+            }
+
+            for (const krabs::property& property : parser.properties()) {
+                properties.emplace_back(stringify(record, parser, property));
+            }
+
+            ProcessData processData{ pid, L"unknown" };
+            if (ProcessData::exists(pid)) {
+                processData = ProcessData::get(pid);
+            }
+
+            // Defer symbolication to leave the main thread responsive to future events.
+            // Use a copy of the process data on the new thread, as it may get modified by future events.
+            backgroundTasks.emplace_back(std::async(std::launch::async, [&sout, &soutMutex, taskName, eventId, pid, tid, stackTrace, properties, processData]() mutable {
+                Symbolicator symbolicator{ std::move(processData), SYM_DIR, SYM_PATH };
+
+                std::lock_guard guard(soutMutex);
+
+                std::cout << "Please wait while a new event is being processed..." << std::endl;
+
+                sout << std::endl << std::endl;
+                sout << L"TaskName " << taskName << std::endl;
+                sout << L"EventId " << eventId << std::endl;
+                sout << std::format(L"ProcessId 0x{:08x}", pid) << std::endl;
+                sout << std::format(L"ThreadId 0x{:08x}", tid) << std::endl;
+                sout << std::endl;
+
+                sout << L"Call Stack:" << std::endl;
+                for (auto& return_address : stackTrace)
+                {
+                    sout << L"   " << symbolicator.symbolicate(reinterpret_cast<void*>(return_address)) << std::endl;
+                }
+                sout << std::endl;
+
+                for (auto& property : properties) {
+                    sout << property << std::endl;
+                }
+                sout << std::endl;
+
+                std::cout << "The event was successfully processed." << std::endl << std::endl;
+            }));
+        }
+    );
+
     std::wcout << L"Ready to catch events! You may now start the processes you wish to monitor." << std::endl << std::endl;
 
     try {
