@@ -96,8 +96,9 @@ int main()
             auto stackTrace = schema.stack_trace();
 
             krabs::parser parser(schema);
+            std::vector<std::wstring> properties;
             for (const krabs::property& property : parser.properties()) {
-                sout << stringify(record, parser, property) << std::endl;
+                properties.emplace_back(stringify(record, parser, property));
             }
 
             ProcessData processData{ pid, L"unknown" };
@@ -107,7 +108,7 @@ int main()
 
             // Defer symbolication to leave the main thread responsive to future events.
             // Use a copy of the process data on the new thread, as it may get modified by future events.
-            backgroundTasks.emplace_back(std::async(std::launch::async, [&sout, &soutMutex, taskName, eventId, pid, tid, stackTrace, processData]() mutable {
+            backgroundTasks.emplace_back(std::async(std::launch::async, [&sout, &soutMutex, taskName, eventId, pid, tid, stackTrace, properties, processData]() mutable {
                 Symbolicator symbolicator{ std::move(processData), SYM_DIR, SYM_PATH };
 
                 std::lock_guard guard(soutMutex);
