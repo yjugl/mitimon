@@ -133,6 +133,11 @@ int main()
                 }
                 sout << std::endl;
 
+                for (auto& property : properties) {
+                    sout << property << std::endl;
+                }
+                sout << std::endl;
+
                 std::cout << "The event was successfully processed." << std::endl << std::endl;
             }));
         }
