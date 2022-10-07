@@ -8,9 +8,11 @@
 #include "symbols.h"
 #include "winkrabs.h"
 
+std::atomic<uint32_t> Symbolicator::nextSymbolicatorId{ 1 };
+
 Symbolicator::Symbolicator(const ProcessData&& processData, const std::wstring& symDir, const std::wstring& symPath) :
     mProcessData{ processData },
-    mProcess{ reinterpret_cast<HANDLE>(processData.pid()) },
+    mProcess{ reinterpret_cast<HANDLE>(nextSymbolicatorId++) },
     mModuleMap{}
 {
     ::SymSetOptions(SYMOPT_IGNORE_NT_SYMPATH);

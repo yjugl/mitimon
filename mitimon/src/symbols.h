@@ -30,6 +30,9 @@ private:
     std::unordered_map<void*, DWORD64> mModuleMap;
 
     bool load(const ImageData& imageData);
+
+private:
+    static std::atomic<uint32_t> nextSymbolicatorId;
 };
 
 #endif // SYMBOLS_H
