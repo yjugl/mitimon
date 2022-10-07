@@ -11,6 +11,13 @@ class ImageData;
 
 class ProcessData {
 public:
+    ProcessData(uint32_t pid, const std::wstring& imageName) :
+        mPid{ pid },
+        mImageName{ imageName },
+        mImageMap{}
+    {
+    };
+
     static bool add(uint32_t pid, const std::wstring& imageName);
     static bool remove(uint32_t pid);
     static bool exists(uint32_t pid);
@@ -20,13 +27,6 @@ private:
     static std::unordered_map<uint32_t, ProcessData> processMap;
 
 public:
-    ProcessData(uint32_t pid, const std::wstring& imageName) :
-        mPid{ pid },
-        mImageName{ imageName },
-        mImageMap{}
-    {
-    };
-
     uint32_t pid() const { return mPid; }
     const std::wstring& imageName() const { return mImageName; }
 

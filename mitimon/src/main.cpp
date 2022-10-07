@@ -1,7 +1,9 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
+#include <future>
 #include <iostream>
+#include <mutex>
 #include <string>
 
 #include "symbols.h"
@@ -71,7 +73,10 @@ inline std::wstring stringify(const EVENT_RECORD& record, krabs::parser& parser,
 
 int main()
 {
+    std::vector<std::future<void>> backgroundTasks;
+
     std::wofstream sout{OUTPUT_FILE};
+    std::mutex soutMutex;
 
     Tracer tracer(SESSION_NAME);
 
@@ -81,41 +86,54 @@ int main()
 
     // This adds the real provider we are interested in.
     tracer.addCustomProvider(MITIGATIONS_PROVIDER, MITIGATIONS_ANY,
-        [&sout](const EVENT_RECORD& record, const krabs::trace_context& traceContext)
+        [&backgroundTasks, &sout, &soutMutex](const EVENT_RECORD& record, const krabs::trace_context& traceContext)
         {
-            std::cout << "Please wait while a new event is being processed..." << std::endl;
-
             krabs::schema schema(record, traceContext.schema_locator);
+            auto taskName = schema.task_name();
+            auto eventId = schema.event_id();
             auto pid = schema.process_id();
             auto tid = schema.thread_id();
-            auto stack_trace = schema.stack_trace();
-
-            sout << std::endl << std::endl;
-            sout << L"TaskName " << schema.task_name() << std::endl;
-            sout << L"EventId " << schema.event_id() << std::endl;
-            sout << std::format(L"ProcessId 0x{:08x}", pid) << std::endl;
-            sout << std::format(L"ThreadId 0x{:08x}", tid) << std::endl;
-            sout << std::endl;
-
-            Symbolicator symbolicator{ pid, SYM_DIR, SYM_PATH };
-
-            // Locate the kernel based on the assumption that the first return address points somewhere in EtwWrite.
-            symbolicator.loadWithHint(L"ntoskrnl", L"C:\\Windows\\System32\\ntoskrnl.exe",
-                L"EtwWrite", reinterpret_cast<void*>(stack_trace[0]));
-
-            sout << L"Call Stack:" << std::endl;
-            for (auto& return_address : stack_trace)
-            {
-                sout << L"   " << symbolicator.symbolicate(reinterpret_cast<void*>(return_address)) << std::endl;
-            }
-            sout << std::endl;
+            auto stackTrace = schema.stack_trace();
 
             krabs::parser parser(schema);
             for (const krabs::property& property : parser.properties()) {
                 sout << stringify(record, parser, property) << std::endl;
             }
 
-            std::cout << "The event was successfully processed." << std::endl << std::endl;
+            ProcessData processData{ pid, L"unknown" };
+            if (ProcessData::exists(pid)) {
+                processData = ProcessData::get(pid);
+            }
+
+            // Defer symbolication to leave the main thread responsive to future events.
+            // Use a copy of the process data on the new thread, as it may get modified by future events.
+            backgroundTasks.emplace_back(std::async(std::launch::async, [&sout, &soutMutex, taskName, eventId, pid, tid, stackTrace, processData]() mutable {
+                Symbolicator symbolicator{ std::move(processData), SYM_DIR, SYM_PATH };
+
+                std::lock_guard guard(soutMutex);
+
+                std::cout << "Please wait while a new event is being processed..." << std::endl;
+
+                sout << std::endl << std::endl;
+                sout << L"TaskName " << taskName << std::endl;
+                sout << L"EventId " << eventId << std::endl;
+                sout << std::format(L"ProcessId 0x{:08x}", pid) << std::endl;
+                sout << std::format(L"ThreadId 0x{:08x}", tid) << std::endl;
+                sout << std::endl;
+
+                // Locate the kernel based on the assumption that the first return address points somewhere in EtwWrite.
+                symbolicator.loadWithHint(L"ntoskrnl", L"C:\\Windows\\System32\\ntoskrnl.exe",
+                    L"EtwWrite", reinterpret_cast<void*>(stackTrace[0]));
+
+                sout << L"Call Stack:" << std::endl;
+                for (auto& return_address : stackTrace)
+                {
+                    sout << L"   " << symbolicator.symbolicate(reinterpret_cast<void*>(return_address)) << std::endl;
+                }
+                sout << std::endl;
+
+                std::cout << "The event was successfully processed." << std::endl << std::endl;
+            }));
         }
     );
     try {

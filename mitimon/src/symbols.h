@@ -10,7 +10,7 @@
 
 class Symbolicator {
 public:
-    Symbolicator(uint32_t pid, const std::wstring& symDir, const std::wstring& symPath);
+    Symbolicator(const ProcessData&& processData, const std::wstring& symDir, const std::wstring& symPath);
 
     ~Symbolicator();
 
@@ -25,7 +25,7 @@ public:
     bool loadWithHint(const std::wstring& imageName, const std::wstring& imagePath, const std::wstring& symbolName, void* symbolAddress);
 
 private:
-    ProcessData* mProcessData;
+    ProcessData mProcessData;
     HANDLE mProcess;
     std::unordered_map<void*, DWORD64> mModuleMap;
 

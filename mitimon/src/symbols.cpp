@@ -8,24 +8,16 @@
 #include "symbols.h"
 #include "winkrabs.h"
 
-Symbolicator::Symbolicator(uint32_t pid, const std::wstring& symDir, const std::wstring& symPath) :
-    mProcessData{nullptr},
-    mProcess{nullptr},
+Symbolicator::Symbolicator(const ProcessData&& processData, const std::wstring& symDir, const std::wstring& symPath) :
+    mProcessData{ processData },
+    mProcess{ reinterpret_cast<HANDLE>(processData.pid()) },
     mModuleMap{}
 {
-    if (!ProcessData::exists(pid)) {
-        return;
-    }
-
-    mProcessData = &ProcessData::get(pid);
-
     ::SymSetOptions(SYMOPT_IGNORE_NT_SYMPATH);
 
     if (!::CreateDirectoryW(symDir.c_str(), nullptr) && ::GetLastError() != ERROR_ALREADY_EXISTS) {
         throw std::runtime_error("CreateDirectoryW failed.");
     }
-
-    mProcess = reinterpret_cast<HANDLE>(static_cast<size_t>(pid));
 
     if (!::SymInitializeW(mProcess, symPath.c_str(), FALSE)) {
         throw std::runtime_error("SymInitializeW failed.");
@@ -35,10 +27,6 @@ Symbolicator::Symbolicator(uint32_t pid, const std::wstring& symDir, const std::
 
 Symbolicator::~Symbolicator()
 {
-    if (!mProcessData) {
-        return;
-    }
-
     for (auto& [imageBase, module_] : mModuleMap) {
         ::SymUnloadModule64(mProcess, module_);
     }
@@ -49,17 +37,14 @@ Symbolicator::~Symbolicator()
 std::wstring Symbolicator::symbolicate(void* address)
 {
     std::wstring result{ std::format(L"0x{:016x}", reinterpret_cast<size_t>(address)) };
-    if (!mProcessData) {
-        return result;
-    }
 
-    auto [imageBase, offset] = mProcessData->decompose(address);
+    auto [imageBase, offset] = mProcessData.decompose(address);
 
     if (!imageBase) {
         return result;
     }
 
-    const auto& imageData = mProcessData->getImage(imageBase);
+    const auto& imageData = mProcessData.getImage(imageBase);
     result += std::format(L" {}+0x{:x}", imageData.name(), offset);
 
     if (!load(imageData)) {
@@ -136,10 +121,6 @@ bool Symbolicator::load(const ImageData& imageData)
 
 bool Symbolicator::loadWithHint(const std::wstring& imageName, const std::wstring& imagePath, const std::wstring& symbolName, void* symbolAddress)
 {
-    if (!mProcessData) {
-        return false;
-    }
-
     SYMSRV_INDEX_INFOW indexInfo{};
     indexInfo.sizeofstruct = sizeof(indexInfo);
     if (!::SymSrvGetFileIndexInfoW(imagePath.c_str(), &indexInfo, 0)) {
@@ -187,7 +168,8 @@ bool Symbolicator::loadWithHint(const std::wstring& imageName, const std::wstrin
 
     ::SymUnloadModule64(mProcess, module_);
 
-    ImageData::add(mProcessData->pid(), reinterpret_cast<void*>(guessedImageBase), moduleInfo.ImageSize, imagePath);
+    ImageData imageData{ reinterpret_cast<void*>(guessedImageBase), moduleInfo.ImageSize, imagePath };
+    mProcessData.addImage(std::move(imageData));
 
     module_ = ::SymLoadModuleExW(
         mProcess, nullptr, imagePath.c_str(), imageName.c_str(),
