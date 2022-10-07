@@ -119,12 +119,12 @@ bool Symbolicator::load(const ImageData& imageData)
     return true;
 }
 
-bool Symbolicator::loadWithHint(const std::wstring& imageName, const std::wstring& imagePath, const std::wstring& symbolName, void* symbolAddress)
+ImageData Symbolicator::guessImageFromSymbol(const std::wstring& imagePath, const std::wstring& symbolName, void* symbolAddress)
 {
     SYMSRV_INDEX_INFOW indexInfo{};
     indexInfo.sizeofstruct = sizeof(indexInfo);
     if (!::SymSrvGetFileIndexInfoW(imagePath.c_str(), &indexInfo, 0)) {
-        return false;
+        return ImageData{};
     }
 
     std::wcout << L"Downloading symbols file " << indexInfo.pdbfile << L"..." << std::endl;
@@ -133,29 +133,29 @@ bool Symbolicator::loadWithHint(const std::wstring& imageName, const std::wstrin
     if (!::SymFindFileInPathW(mProcess, nullptr, indexInfo.pdbfile,
         &indexInfo.guid, indexInfo.age, 0, SSRVOPT_GUIDPTR, foundFile,
         nullptr, nullptr)) {
-        return false;
+        return ImageData{};
     }
 
     auto module_ = ::SymLoadModuleExW(
-        mProcess, nullptr, imagePath.c_str(), imageName.c_str(),
+        mProcess, nullptr, imagePath.c_str(), L"_temporary_guess_",
         0, 0, nullptr, 0);
     if (!module_) {
-        return false;
+        return ImageData{};
     }
 
     IMAGEHLP_MODULEW64 moduleInfo{};
     moduleInfo.SizeOfStruct = sizeof moduleInfo;
     if (!::SymGetModuleInfoW64(mProcess, module_, &moduleInfo)) {
         ::SymUnloadModule64(mProcess, module_);
-        return false;
+        return ImageData{};
     }
 
     SYMBOL_INFOW symbol{};
     symbol.SizeOfStruct = sizeof (symbol);
     symbol.MaxNameLen = 0;
-    if (!::SymFromNameW(mProcess, std::format(L"{}!{}", imageName, symbolName).c_str(), &symbol)) {
+    if (!::SymFromNameW(mProcess, std::format(L"_temporary_guess_!{}", symbolName).c_str(), &symbol)) {
         ::SymUnloadModule64(mProcess, module_);
-        return false;
+        return ImageData{};
     }
 
     bool isOnNextPage = (reinterpret_cast<DWORD64>(symbolAddress) & 0xFFFUi64) < (symbol.Address & 0xFFFUi64);
@@ -168,22 +168,5 @@ bool Symbolicator::loadWithHint(const std::wstring& imageName, const std::wstrin
 
     ::SymUnloadModule64(mProcess, module_);
 
-    ImageData imageData{ reinterpret_cast<void*>(guessedImageBase), moduleInfo.ImageSize, imagePath };
-    mProcessData.addImage(std::move(imageData));
-
-    module_ = ::SymLoadModuleExW(
-        mProcess, nullptr, imagePath.c_str(), imageName.c_str(),
-        guessedImageBase, 0, nullptr, 0);
-    if (!module_) {
-        return false;
-    }
-
-    moduleInfo.SizeOfStruct = sizeof moduleInfo;
-    if (!::SymGetModuleInfoW64(mProcess, module_, &moduleInfo)) {
-        ::SymUnloadModule64(mProcess, module_);
-        return false;
-    }
-
-    mModuleMap.emplace(std::make_pair(reinterpret_cast<void*>(guessedImageBase), module_));
-    return true;
+    return ImageData{ reinterpret_cast<void*>(guessedImageBase), moduleInfo.ImageSize, imagePath };
 }

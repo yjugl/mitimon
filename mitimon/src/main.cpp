@@ -71,13 +71,70 @@ inline std::wstring stringify(const EVENT_RECORD& record, krabs::parser& parser,
     return result;
 }
 
+void locateKernel()
+{
+    Tracer tracer(SESSION_NAME);
+    std::atomic<bool> canStop{ false };
+
+    // Use ACG failures originating from this process to guess the kernel address.
+    tracer.addCustomProvider(MITIGATIONS_PROVIDER, MITIGATIONS_ANY,
+        [&canStop](const EVENT_RECORD& record, const krabs::trace_context& traceContext) {
+
+        if (canStop.load()) {
+                return;
+        }
+
+        krabs::schema schema(record, traceContext.schema_locator);
+        auto pid = schema.process_id();
+        if (pid != GetProcessId(GetCurrentProcess())) {
+            return;
+        }
+
+        // Locate the kernel based on the assumption that the first return address points somewhere in EtwWrite.
+        auto stackTrace = schema.stack_trace();
+        Symbolicator symbolicator{ ProcessData{ pid, L"self" }, SYM_DIR, SYM_PATH };
+        ProcessData::setKernelImage(symbolicator.guessImageFromSymbol(
+            L"C:\\Windows\\System32\\ntoskrnl.exe", L"EtwWrite", reinterpret_cast<void*>(stackTrace[0])
+        ));
+
+        canStop.store(true);
+    });
+
+    // Provoke ACG failures originating from this process.
+    std::future<void> backgroundTask = std::async(std::launch::async, [&canStop, &tracer]() {
+        while (!canStop.load()) {
+            PROCESS_MITIGATION_DYNAMIC_CODE_POLICY policy{};
+            policy.AuditProhibitDynamicCode = 1;
+            ::SetProcessMitigationPolicy(ProcessDynamicCodePolicy, &policy, sizeof policy);
+            void* address = ::VirtualAlloc(nullptr, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            if (address) {
+                ::VirtualFree(address, 0, MEM_RELEASE);
+            }
+            ::Sleep(500);
+        }
+        tracer.stop();
+    });
+
+    try {
+        tracer.start();
+    }
+    catch (std::runtime_error e) {
+        std::cout << e.what() << std::endl;
+    }
+}
+
 int main()
 {
-    std::vector<std::future<void>> backgroundTasks;
+    std::wcout << L"Please wait while the kernel base address is being guessed..." << std::endl;
+
+    locateKernel();
+
+    std::wcout << L"Guessed kernel base address: " << ProcessData::kernelImage().base() << L"." << std::endl << std::endl;
 
     std::wofstream sout{OUTPUT_FILE};
     std::mutex soutMutex;
 
+    std::vector<std::future<void>> backgroundTasks;
     Tracer tracer(SESSION_NAME);
 
     // The process provider will track process creation and image loading,
@@ -122,10 +179,6 @@ int main()
                 sout << std::format(L"ThreadId 0x{:08x}", tid) << std::endl;
                 sout << std::endl;
 
-                // Locate the kernel based on the assumption that the first return address points somewhere in EtwWrite.
-                symbolicator.loadWithHint(L"ntoskrnl", L"C:\\Windows\\System32\\ntoskrnl.exe",
-                    L"EtwWrite", reinterpret_cast<void*>(stackTrace[0]));
-
                 sout << L"Call Stack:" << std::endl;
                 for (auto& return_address : stackTrace)
                 {
@@ -142,6 +195,9 @@ int main()
             }));
         }
     );
+
+    std::wcout << L"Ready to catch events! You may now start the processes you wish to monitor." << std::endl << std::endl;
+
     try {
         tracer.start();
     }

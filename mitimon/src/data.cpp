@@ -9,6 +9,8 @@
 
 std::unordered_map<uint32_t, ProcessData> ProcessData::processMap;
 
+ImageData ProcessData::kernelImageData;
+
 bool ProcessData::add(uint32_t pid, const std::wstring& imageName)
 {
     auto [it, isNew] = processMap.emplace(std::make_pair(pid, ProcessData(pid, imageName)));
@@ -30,6 +32,10 @@ ProcessData& ProcessData::get(uint32_t pid)
     return processMap.at(pid);
 }
 
+bool ProcessData::addImage(const ImageData& imageData)
+{
+    return addImage(ImageData(imageData));
+}
 
 bool ProcessData::addImage(ImageData&& imageData)
 {

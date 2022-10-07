@@ -22,7 +22,7 @@ public:
 
     std::wstring symbolicate(void* address);
 
-    bool loadWithHint(const std::wstring& imageName, const std::wstring& imagePath, const std::wstring& symbolName, void* symbolAddress);
+    ImageData guessImageFromSymbol(const std::wstring& imagePath, const std::wstring& symbolName, void* symbolAddress);
 
 private:
     ProcessData mProcessData;

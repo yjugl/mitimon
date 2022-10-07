@@ -85,3 +85,8 @@ void Tracer::start()
 
     mTrace.start();
 }
+
+void Tracer::stop()
+{
+    mTrace.stop();
+}

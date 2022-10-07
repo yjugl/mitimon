@@ -30,6 +30,8 @@ public:
 
     void start();
 
+    void stop();
+
 private:
     krabs::user_trace mTrace;
     std::vector<krabs::provider<>> mProviders;
